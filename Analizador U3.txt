@@ -1,0 +1,925 @@
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.util.Stack;
+import java.lang.Math;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Collections;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * ENUM Y CLASES PARA ANÁLISIS LÉXICO (Se mantienen)
+ */
+
+enum TokenType
+{
+    OPERATOR_BIN, // +, -, *, /, ^
+    OPERATOR_UNARY, // √
+    IDENTIFIER_OR_NUMBER, // a, b, 1, 23, variableX
+    LPAREN, // (
+    RPAREN, // )
+    ASSIGNMENT, // =
+    EOF // End of File
+}
+
+class Token
+{
+    TokenType type;
+    String value;
+
+    Token(TokenType type, String value)
+    {
+        this.type = type;
+        this.value = value;
+    }
+
+    @Override
+    public String toString()
+    {
+        return "[" + type + ":" + value + "]";
+    }
+}
+
+class Lexer
+{
+    private String input;
+    private int position;
+
+    public Lexer(String input)
+    {
+        // *** CAMBIO CLAVE: NO ELIMINAMOS TODOS LOS ESPACIOS EN BLANCO. ***
+        // Solo eliminamos los saltos de línea y tabulaciones, o simplemente 
+        // dejamos que el analizador de tokens maneje todos los espacios.
+        // Optaremos por manejar los espacios directamente en el bucle 'tokenize'.
+        this.input = input;
+        this.position = 0;
+    }
+
+    public List<Token> tokenize() throws IllegalArgumentException
+    {
+        List<Token> tokens = new ArrayList<>();
+        
+        while (position<input.length()) {
+            
+            // 1. Saltar Espacios en Blanco
+            while (position<input.length() && Character.isWhitespace(input.charAt(position))) {
+                position++;
+            }
+
+if (position >= input.length()) break; // Fin de la cadena después de espacios
+
+char currentChar = input.charAt(position);
+
+// 2. Manejo de Identificadores y Números
+if (Character.isLetterOrDigit(currentChar))
+{
+    StringBuilder sb = new StringBuilder();
+
+    // Consumir el identificador o número completo
+    while (position < input.length() && Character.isLetterOrDigit(input.charAt(position)))
+    {
+        sb.append(input.charAt(position++));
+    }
+
+    tokens.add(new Token(TokenType.IDENTIFIER_OR_NUMBER, sb.toString()));
+
+    // *** DETECCIÓN DE ERROR DE ESPACIO ENTRE IDENTIFICADORES/NÚMEROS ***
+    // Saltar cualquier espacio que siga inmediatamente
+    int postTokenPosition = position;
+    while (postTokenPosition < input.length() && Character.isWhitespace(input.charAt(postTokenPosition)))
+    {
+        postTokenPosition++;
+    }
+
+    // Si después de los espacios sigue otra letra o dígito (que debería ser parte del mismo token),
+    // ES UN ERROR LÉXICO (ej: "3 4" o "a b")
+    if (postTokenPosition < input.length() && Character.isLetterOrDigit(input.charAt(postTokenPosition)))
+    {
+        throw new IllegalArgumentException(
+           "Error Léxico: Número o Identificador mal formado. Se detectó un espacio entre '"
+           + sb.toString() + "' y '" + input.charAt(postTokenPosition) + "' en posición " + (position + 1)
+       );
+    }
+    // Si llegamos aquí, el espacio es válido (o no hay) y el lexer continúa en la posición 'position'.
+    continue;
+}
+
+// 3. Manejo de Operadores y Delimitadores
+switch (currentChar)
+{
+    case '+':
+    case '*':
+    case '/':
+    case '^':
+        tokens.add(new Token(TokenType.OPERATOR_BIN, String.valueOf(currentChar)));
+        break;
+    case '-':
+        tokens.add(new Token(TokenType.OPERATOR_BIN, "-"));
+        break;
+    case '√':
+        tokens.add(new Token(TokenType.OPERATOR_UNARY, "√"));
+        break;
+    case '(':
+        tokens.add(new Token(TokenType.LPAREN, "("));
+        break;
+    case ')':
+        tokens.add(new Token(TokenType.RPAREN, ")"));
+        break;
+    case '=':
+        tokens.add(new Token(TokenType.ASSIGNMENT, "="));
+        break;
+    default:
+        throw new IllegalArgumentException("Error Léxico: Carácter no reconocido en posición " + (position + 1) + ": '" + currentChar + "'");
+}
+position++;
+        }
+        
+        tokens.add(new Token(TokenType.EOF, ""));
+return tokens;
+    }
+}
+/**
+ * CLASES DE ESTRUCTURAS DE DATOS PARA COMPILADORES (Se mantienen)
+ */
+
+class Node
+{
+    String value;
+    Node left, right;
+    Node(String value)
+    {
+        this.value = value;
+        left = right = null;
+    }
+}
+
+class PInstruction
+{
+    String op;
+    String arg;
+    PInstruction(String op, String arg)
+    {
+        this.op = op;
+        this.arg = arg;
+    }
+    @Override
+    public String toString()
+    {
+        return op + (arg.isEmpty() ? "" : " " + arg);
+    }
+}
+
+class Quadruple
+{
+    String op;
+    String arg1;
+    String arg2;
+    String result;
+    Quadruple(String op, String arg1, String arg2, String result)
+    {
+        this.op = op;
+        this.arg1 = arg1;
+        this.arg2 = arg2;
+        this.result = result;
+    }
+    @Override
+    public String toString()
+    {
+        return "(" + op + ", " + arg1 + ", " + arg2 + ", " + result + ")";
+    }
+}
+
+class Triple
+{
+    String op;
+    String arg1;
+    String arg2;
+    Triple(String op, String arg1, String arg2)
+    {
+        this.op = op;
+        this.arg1 = arg1;
+        this.arg2 = arg2;
+    }
+    @Override
+    public String toString()
+    {
+        return "(" + op + ", " + arg1 + ", " + arg2 + ")";
+    }
+}
+
+
+/**
+ * CLASES GENERADORAS DE CÓDIGO INTERMEDIO (Se mantienen)
+ */
+class IntermediateCodeGenerator
+{
+    private List<Quadruple> quadruples;
+    private List<Triple> triples;
+    private int tempCounter;
+
+    public IntermediateCodeGenerator()
+    {
+        this.quadruples = new ArrayList<>();
+        this.triples = new ArrayList<>();
+        this.tempCounter = 1;
+    }
+
+    public void generate(Node node)
+    {
+        Stack<String> stack = new Stack<>();
+        generateExpression(node, stack);
+    }
+
+    public void generateAssignment(String variable, Node expressionRoot)
+    {
+        generateExpression(expressionRoot, new Stack<>());
+        String finalResult = "T" + (tempCounter - 1);
+
+        quadruples.add(new Quadruple("=", finalResult, "-", variable));
+
+        int size = triples.size();
+        String argTriple = size > 0 ? "(" + (size - 1) + ")" : finalResult;
+        triples.add(new Triple("=", argTriple, "-"));
+    }
+
+    private void generateExpression(Node node, Stack<String> stack)
+    {
+        if (node == null) return;
+
+        generateExpression(node.left, stack);
+        generateExpression(node.right, stack);
+
+        if (isOperator(node.value.charAt(0)))
+        {
+            if (isUnaryOperator(node.value.charAt(0)))
+            {
+                String operand = stack.pop();
+                String tempResult = "T" + tempCounter++;
+                quadruples.add(new Quadruple(node.value, operand, "-", tempResult));
+                stack.push(tempResult);
+
+                String argTriple = operand.startsWith("T") ? "(" + (triples.size() - 1) + ")" : operand;
+                triples.add(new Triple(node.value, argTriple, "-"));
+
+            }
+            else
+            {
+                String arg2 = stack.pop();
+                String arg1 = stack.pop();
+                String tempResult = "T" + tempCounter++;
+                quadruples.add(new Quadruple(node.value, arg1, arg2, tempResult));
+                stack.push(tempResult);
+
+                int size = triples.size();
+                String arg2Triple = arg2.startsWith("T") ? "(" + (size - 1) + ")" : arg2;
+                String arg1Triple = arg1.startsWith("T") ? "(" + (size - 2) + ")" : arg1;
+
+                if (arg1.startsWith("T") && arg2.startsWith("T"))
+                {
+                    arg2Triple = "(" + (size - 1) + ")";
+                    arg1Triple = "(" + (size - 2) + ")";
+                }
+                else if (arg1.startsWith("T") && !arg2.startsWith("T"))
+                {
+                    arg1Triple = "(" + (size - 1) + ")";
+                }
+                else if (!arg1.startsWith("T") && arg2.startsWith("T"))
+                {
+                    arg2Triple = "(" + (size - 1) + ")";
+                }
+
+                triples.add(new Triple(node.value, arg1Triple, arg2Triple));
+            }
+        }
+        else
+        {
+            stack.push(node.value);
+        }
+    }
+
+    private boolean isOperator(char c)
+    {
+        return c == '+' || c == '-' || c == '*' || c == '/' || c == '^' || c == '√';
+    }
+
+    private boolean isUnaryOperator(char c)
+    {
+        return c == '√';
+    }
+
+    public List<Quadruple> getQuadruples()
+    {
+        return quadruples;
+    }
+
+    public List<Triple> getTriples()
+    {
+        return triples;
+    }
+}
+
+class PCodeGenerator
+{
+
+    private List<PInstruction> pCode;
+
+    public PCodeGenerator()
+    {
+        this.pCode = new ArrayList<>();
+    }
+
+    public void generate(Node node)
+    {
+        if (node == null) return;
+
+        generate(node.left);
+        generate(node.right);
+
+        if (isOperator(node.value.charAt(0)))
+        {
+            switch (node.value)
+            {
+                case "+": pCode.add(new PInstruction("OPR", "ADD")); break;
+                case "-": pCode.add(new PInstruction("OPR", "SUB")); break;
+                case "*": pCode.add(new PInstruction("OPR", "MUL")); break;
+                case "/": pCode.add(new PInstruction("OPR", "DIV")); break;
+                case "^": pCode.add(new PInstruction("OPR", "POW")); break;
+                case "√": pCode.add(new PInstruction("OPR", "SQRT")); break;
+                default:
+                    throw new IllegalArgumentException("Operador no soportado en código P: " + node.value);
+            }
+        }
+        else
+        {
+            pCode.add(new PInstruction("LIT", node.value));
+        }
+    }
+
+    private boolean isOperator(char c)
+    {
+        return c == '+' || c == '-' || c == '*' || c == '/' || c == '^' || c == '√';
+    }
+
+    public List<PInstruction> getPCode()
+    {
+        return pCode;
+    }
+}
+
+
+/**
+ * CLASE DE PARSEO Y ÁRBOL DE EXPRESIONES (ExpressionParser) - SINTÁCTICO *(CORREGIDO)*
+ */
+class ExpressionParser
+{
+
+    private List<Token> tokens;
+    private int tokenIndex;
+
+    public ExpressionParser(List<Token> tokens)
+    {
+        this.tokens = tokens;
+        this.tokenIndex = 0;
+    }
+
+    // --- Métodos Auxiliares de Gramática (Sintaxis) ---
+
+    private Token peek()
+    {
+        if (tokenIndex >= tokens.size())
+        {
+            return new Token(TokenType.EOF, "");
+        }
+        return tokens.get(tokenIndex);
+    }
+
+    private Token consume(TokenType expectedType) throws IllegalArgumentException
+    {
+        Token current = peek();
+        if (current.type != expectedType) {
+            throw new IllegalArgumentException("Error Sintáctico: Se esperaba '" + expectedType + "' pero se encontró '" + current.type + "' en el token: " + current.value);
+}
+tokenIndex++;
+return current;
+    }
+    
+    private boolean check(TokenType type)
+{
+    return peek().type == type;
+}
+
+private boolean match(TokenType...types)
+{
+    for (TokenType type : types) {
+            if (check(type)) {
+                tokenIndex++;
+return true;
+            }
+        }
+        return false;
+    }
+
+    private int precedence(String operator)
+{
+    switch (operator) {
+            case "+": case "-": return 1;
+        case "*": case "/": return 2;
+        case "^": return 3;
+        case "√": return 4;
+        }
+        return -1;
+    }
+
+    // --- Análisis Sintáctico (Gramática) ---
+
+    public Node parseExpression() throws IllegalArgumentException
+{
+        if (tokens.isEmpty() || check(TokenType.EOF)) {
+        throw new IllegalArgumentException("Error Sintáctico: Expresión vacía.");
+    }
+
+    // El punto de entrada inicial es el nivel de precedencia 0
+    Node root = parsePrecedence(0); 
+        
+        // Verificar que no queden tokens inesperados después de la expresión
+        if (!check(TokenType.EOF)) {
+        // Es posible que el último token sea un ')' que debería haber sido consumido
+        if (check(TokenType.RPAREN))
+        {
+            throw new IllegalArgumentException("Error Sintáctico: Paréntesis de cierre no emparejado.");
+        }
+        throw new IllegalArgumentException("Error Sintáctico: Token inesperado al final de la expresión: " + peek().value);
+    }
+        return root;
+}
+
+/**
+ * Algoritmo de Precedencia (Precedence Climbing/Shunting Yard modificado)
+ * Construye el AST respetando la precedencia y asociatividad de los operadores.
+ */
+private Node parsePrecedence(int minPrecedence) throws IllegalArgumentException
+{
+
+    // 1. Parsear el operando más a la izquierda (Factor o Operador Unario)
+    Node left;
+        
+        if (match(TokenType.OPERATOR_UNARY)) {
+        String opValue = tokens.get(tokenIndex - 1).value;
+        int prec = precedence(opValue);
+
+        // Unario se asocia a la derecha (se requiere una subexpresión completa a su derecha)
+        Node right = parsePrecedence(prec);
+        if (right == null)
+        {
+            throw new IllegalArgumentException("Error Sintáctico: Falta operando para el operador unario '" + opValue + "'.");
+        }
+        left = new Node(opValue);
+        left.right = right;
+    } else {
+        // Es un factor (número/identificador o subexpresión entre paréntesis)
+        left = parseFactor();
+    }
+
+        // 2. Aplicar operadores binarios con precedencia igual o superior
+        while (true) {
+        Token operatorToken = peek();
+
+        if (operatorToken.type != TokenType.OPERATOR_BIN) break;
+
+        int currentPrecedence = precedence(operatorToken.value);
+
+        if (currentPrecedence < minPrecedence) break;
+
+        tokenIndex++; // Consumir el operador binario
+
+        // Determinar la nueva mínima precedencia para la llamada recursiva (asociatividad)
+        int nextMinPrecedence;
+        if (operatorToken.value.equals("^"))
+        {
+            // El operador de Potencia (^) es de asociatividad derecha
+            nextMinPrecedence = currentPrecedence;
+        }
+        else
+        {
+            // Los demás operadores binarios son de asociatividad izquierda
+            nextMinPrecedence = currentPrecedence + 1;
+        }
+
+        // Analizar la subexpresión derecha
+        Node right = parsePrecedence(nextMinPrecedence);
+
+        if (right == null)
+        {
+            throw new IllegalArgumentException("Error Sintáctico: Falta operando derecho para el operador binario '" + operatorToken.value + "'.");
+        }
+
+        // Crear el nuevo nodo de la operación binaria
+        Node operatorNode = new Node(operatorToken.value);
+        operatorNode.left = left;
+        operatorNode.right = right;
+        left = operatorNode; // El resultado se convierte en el nuevo operando izquierdo
+    }
+
+        return left;
+}
+
+// Maneja los elementos básicos de la expresión: números, identificadores o subexpresiones.
+private Node parseFactor() throws IllegalArgumentException
+{
+    Token token = peek();
+
+        if (match(TokenType.IDENTIFIER_OR_NUMBER)) {
+        return new Node(token.value);
+    } else if (match(TokenType.LPAREN)) {
+        Node expr = parsePrecedence(0); // Analizar la subexpresión completa
+
+        if (expr == null)
+        {
+            throw new IllegalArgumentException("Error Sintáctico: Expresión vacía dentro de paréntesis.");
+        }
+
+        // Consumir el paréntesis de cierre
+        consume(TokenType.RPAREN);
+        return expr;
+    } else {
+        throw new IllegalArgumentException("Error Sintáctico: Se esperaba un operando, '√' o '(' pero se encontró '" + token.value + "'");
+    }
+}
+
+// --- Métodos de Recorrido de Árbol (Se mantienen) ---
+
+public String inOrder(Node node)
+{
+    if (node == null) return "";
+    StringBuilder result = new StringBuilder();
+
+    boolean isUnary = node.value.equals("√");
+
+    // Solo añadir paréntesis si es un operador binario (no unario)
+    boolean needsParentheses = !isUnary && (node.left != null || node.right != null);
+
+    if (needsParentheses) result.append("(");
+
+    if (isUnary)
+    {
+        result.append(node.value);
+        result.append(inOrder(node.right));
+    }
+    else
+    {
+        result.append(inOrder(node.left));
+        result.append(node.value);
+        result.append(inOrder(node.right));
+    }
+
+    if (needsParentheses) result.append(")");
+
+    return result.toString();
+}
+
+public String preOrder(Node node)
+{
+    if (node == null) return "";
+    return node.value + preOrder(node.left) + preOrder(node.right);
+}
+
+public String postOrder(Node node)
+{
+    if (node == null) return "";
+    return postOrder(node.left) + postOrder(node.right) + node.value;
+}
+}
+
+
+/**
+ * CLASE DE INTERFAZ GRÁFICA (ExpressionAnalyzerGUI) - MODIFICADA
+ */
+public class ExpressionAnalyzerGUI extends JFrame
+{
+
+    private JTextField expressionField;
+private JTextArea resultArea;
+private JTextArea treeVisualizationArea;
+private JTextArea pCodeArea;
+private JTextArea intermediateCodeArea;
+private JButton calculateButton;
+private JButton clearButton; // Nuevo botón
+private JTextArea lexerOutputArea;
+
+public ExpressionAnalyzerGUI()
+{
+    super("🚀 Analizador de Expresiones y Código Intermedio");
+    try
+    {
+        UIManager.setLookAndFeel("javax.swing.plaf.nimbus.NimbusLookAndFeel");
+    }
+    catch (Exception e)
+    {
+        try
+        {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        }
+        catch (Exception ex) { }
+    }
+    createGUI();
+}
+
+private void createGUI()
+{
+    setLayout(new BorderLayout(15, 15));
+
+    // --- Panel de Entrada (Norte) ---
+    JPanel inputPanel = new JPanel();
+    inputPanel.setLayout(new FlowLayout(FlowLayout.CENTER, 20, 10));
+    inputPanel.setBackground(new Color(240, 248, 255));
+
+    JLabel inputLabel = new JLabel("Introduce una expresión o asignación (ej: a=b+c*√d):");
+    inputLabel.setFont(new Font("SansSerif", Font.BOLD, 14));
+    inputPanel.add(inputLabel);
+
+    expressionField = new JTextField(35);
+    expressionField.setFont(new Font("Monospaced", Font.PLAIN, 14));
+    inputPanel.add(expressionField);
+
+    calculateButton = new JButton("✨ Analizar Expresión");
+    calculateButton.setFont(new Font("SansSerif", Font.BOLD, 14));
+    calculateButton.setBackground(new Color(60, 179, 113));
+    calculateButton.setForeground(Color.WHITE);
+    inputPanel.add(calculateButton);
+
+    // Nuevo botón de limpieza
+    clearButton = new JButton("🗑 Limpiar Todo");
+    clearButton.setFont(new Font("SansSerif", Font.BOLD, 14));
+    clearButton.setBackground(new Color(220, 20, 60)); // Rojo carmesí
+    clearButton.setForeground(Color.WHITE);
+    inputPanel.add(clearButton);
+
+    add(inputPanel, BorderLayout.NORTH);
+
+    // --- Panel Central (5 áreas de texto en 2 filas) ---
+    JPanel mainCenterPanel = new JPanel(new GridLayout(2, 1, 15, 15));
+    mainCenterPanel.setBorder(BorderFactory.createEmptyBorder(0, 15, 15, 15));
+
+    // Fila 1: Léxico y Sintáctico (Conversiones y Árbol)
+    JPanel topRowPanel = new JPanel(new GridLayout(1, 3, 15, 15));
+
+    // 1. Salida Léxica
+    lexerOutputArea = createStyledTextArea();
+    lexerOutputArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+    topRowPanel.add(createTitledPanel("💎 Análisis Léxico (Tokens)", lexerOutputArea, new Color(255, 240, 245)));
+
+    // 2. Resultados de Conversión (Sintáctico)
+    resultArea = createStyledTextArea();
+    resultArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+    topRowPanel.add(createTitledPanel("📝 Conversiones (Infija/Prefija/Posfija)", resultArea, new Color(255, 239, 213)));
+
+    // 3. Visualización del Árbol (Sintáctico)
+    treeVisualizationArea = createStyledTextArea();
+    treeVisualizationArea.setFont(new Font("Monospaced", Font.BOLD, 12));
+    topRowPanel.add(createTitledPanel("🌳 Árbol Sintáctico (AST)", treeVisualizationArea, new Color(224, 255, 255)));
+
+    // Fila 2: Código Intermedio
+    JPanel bottomRowPanel = new JPanel(new GridLayout(1, 2, 15, 15));
+
+    // 4. Código P
+    pCodeArea = createStyledTextArea();
+    pCodeArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+    bottomRowPanel.add(createTitledPanel("💻 Código P (P-Code)", pCodeArea, new Color(240, 248, 255)));
+
+    // 5. Cuádruplos y Tríplos
+    intermediateCodeArea = createStyledTextArea();
+    intermediateCodeArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+    bottomRowPanel.add(createTitledPanel("📊 Cuádruplos y Tríplos", intermediateCodeArea, new Color(230, 230, 250)));
+
+    mainCenterPanel.add(topRowPanel);
+    mainCenterPanel.add(bottomRowPanel);
+    add(mainCenterPanel, BorderLayout.CENTER);
+
+
+    // --- Configuración de Eventos ---
+    calculateButton.addActionListener(e->calculateExpression());
+
+    // Añadir el Listener para el nuevo botón
+    clearButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e)
+{
+    clearAllFields();
+}
+        });
+
+setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+setExtendedState(JFrame.MAXIMIZED_BOTH);
+setMinimumSize(new Dimension(1200, 600));
+setVisible(true);
+    }
+    
+    private JTextArea createStyledTextArea()
+{
+    JTextArea area = new JTextArea(10, 20);
+    area.setEditable(false);
+    area.setLineWrap(true);
+    area.setWrapStyleWord(true);
+    area.setBackground(Color.WHITE);
+    area.setCaretPosition(0);
+    return area;
+}
+
+private JPanel createTitledPanel(String title, JTextArea area, Color bgColor)
+{
+    JPanel panel = new JPanel(new BorderLayout());
+    panel.setBackground(bgColor);
+    panel.setBorder(BorderFactory.createTitledBorder(
+        BorderFactory.createLineBorder(Color.DARK_GRAY, 1),
+        title,
+        javax.swing.border.TitledBorder.LEFT,
+        javax.swing.border.TitledBorder.TOP,
+        new Font("SansSerif", Font.BOLD, 14),
+        Color.BLUE
+    ));
+
+    JScrollPane scrollPane = new JScrollPane(area);
+    scrollPane.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+    panel.add(scrollPane, BorderLayout.CENTER);
+    return panel;
+}
+
+// --- LÓGICA DE CÁLCULO ---
+
+private void calculateExpression()
+{
+    String expression = expressionField.getText().trim();
+    if (expression.isEmpty())
+    {
+        JOptionPane.showMessageDialog(this, "Por favor, introduce una expresión.", "Error", JOptionPane.ERROR_MESSAGE);
+        return;
+    }
+
+    clearOutputAreas();
+
+    try
+    {
+        // 1. FASE LÉXICA
+        Lexer lexer = new Lexer(expression);
+        List<Token> tokens = lexer.tokenize();
+        displayLexerOutput(tokens);
+
+        // 2. FASE SINTÁCTICA Y SEMÁNTICA (AST)
+
+        String variable = null;
+        List<Token> expressionTokens;
+
+        // Revisa si es una asignación (Identificador + '=' + Expresión)
+        if (tokens.size() >= 3 &&
+            tokens.get(0).type == TokenType.IDENTIFIER_OR_NUMBER &&
+            tokens.get(1).type == TokenType.ASSIGNMENT)
+        {
+            variable = tokens.get(0).value;
+            // La expresión son los tokens a partir del tercero (índice 2) hasta el penúltimo (EOF)
+            expressionTokens = tokens.subList(2, tokens.size() - 1);
+
+            if (expressionTokens.isEmpty())
+            {
+                throw new IllegalArgumentException("Error de Asignación: Expresión de asignación vacía.");
+            }
+            resultArea.setText("Asignación detectada: " + variable + " = ...\n\n");
+        }
+        else
+        {
+            // Es una expresión simple
+            // La expresión son todos los tokens hasta el penúltimo (EOF)
+            expressionTokens = tokens.subList(0, tokens.size() - 1);
+            if (expressionTokens.isEmpty())
+            {
+                throw new IllegalArgumentException("Expresión vacía.");
+            }
+        }
+
+        ExpressionParser parser = new ExpressionParser(expressionTokens);
+        Node root = parser.parseExpression(); // Inicia el análisis sintáctico (Gramática)
+
+        // 3. FASE DE GENERACIÓN DE CÓDIGO (POST-SINTAXIS)
+
+        resultArea.append("Infija (Reconstruida): " + parser.inOrder(root) + "\n");
+        resultArea.append("Prefija: " + parser.preOrder(root) + "\n");
+        resultArea.append("Posfija: " + parser.postOrder(root) + "\n");
+
+
+        treeVisualizationArea.setText("Árbol Sintáctico Abstracto (AST):\n");
+        printTree(root, "", true);
+
+        // Generar P-Code
+        PCodeGenerator pCodeGenerator = new PCodeGenerator();
+        pCodeGenerator.generate(root);
+        displayPCode(pCodeGenerator.getPCode(), variable);
+
+        // Generar Código Intermedio
+        IntermediateCodeGenerator iCodeGenerator = new IntermediateCodeGenerator();
+        if (variable != null)
+        {
+            iCodeGenerator.generateAssignment(variable, root);
+        }
+        else
+        {
+            iCodeGenerator.generate(root);
+        }
+        displayIntermediateCode(iCodeGenerator.getQuadruples(), iCodeGenerator.getTriples());
+
+
+    }
+    catch (IllegalArgumentException ex)
+    {
+        JOptionPane.showMessageDialog(this, "Error de Compilación: " + ex.getMessage(), "Error Léxico o Sintáctico", JOptionPane.ERROR_MESSAGE);
+        clearOutputAreas();
+    }
+    catch (Exception ex)
+    {
+        JOptionPane.showMessageDialog(this, "Ocurrió un error inesperado. Revisa la consola para más detalles.", "Error General", JOptionPane.ERROR_MESSAGE);
+        ex.printStackTrace();
+        clearOutputAreas();
+    }
+}
+
+/**
+ * Limpia solo las áreas de salida (sin la caja de texto de la expresión).
+ */
+private void clearOutputAreas()
+{
+    lexerOutputArea.setText("");
+    resultArea.setText("");
+    treeVisualizationArea.setText("");
+    pCodeArea.setText("");
+    intermediateCodeArea.setText("");
+}
+
+/**
+ * Limpia la expresión de entrada y todas las áreas de salida.
+ */
+private void clearAllFields()
+{
+    expressionField.setText("");
+    clearOutputAreas();
+}
+
+private void displayLexerOutput(List<Token> tokens)
+{
+    lexerOutputArea.setText("Tokens Generados:\n");
+    lexerOutputArea.append("----------------------------\n");
+    for (Token t : tokens) {
+            lexerOutputArea.append(t.toString() + "\n");
+        }
+    }
+
+    private void displayIntermediateCode(List<Quadruple> quadruples, List<Triple> triples)
+{
+    intermediateCodeArea.setText("Cuádruplos:\n");
+    int i = 0;
+    for (Quadruple q : quadruples) {
+            intermediateCodeArea.append(i++ + ": " + q.toString() + "\n");
+        }
+        intermediateCodeArea.append("\nTríplos:\n");
+i = 0;
+for (Triple t : triples)
+{
+    intermediateCodeArea.append(i++ + ": " + t.toString() + "\n");
+}
+    }
+
+    private void displayPCode(List<PInstruction> pCode, String variable)
+{
+    pCodeArea.setText("P-Code:\n");
+    pCodeArea.append("----------------------------\n");
+    for (PInstruction inst : pCode) {
+            pCodeArea.append(inst.toString() + "\n");
+        }
+        if (variable != null)
+{
+    pCodeArea.append("STO " + variable + " (Almacenar Resultado)");
+}
+    }
+
+    private void printTree(Node node, String prefix, boolean isTail)
+{
+    if (node == null) return;
+
+    if (node.right != null)
+    {
+        printTree(node.right, prefix + (isTail ? "│    " : "     "), false);
+    }
+
+    treeVisualizationArea.append(prefix + (isTail ? "└── " : "┌── ") + node.value + "\n");
+
+    if (node.left != null)
+    {
+        printTree(node.left, prefix + (isTail ? "     " : "│    "), true);
+    }
+}
+
+public static void main(String[] args)
+{
+    SwingUtilities.invokeLater(()-> new ExpressionAnalyzerGUI());
+}
+}
